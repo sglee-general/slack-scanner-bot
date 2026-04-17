@@ -55,7 +55,7 @@ export default async function handler(req, res) {
     const finalUrl = `http://${ip}/apps/box/index.html#opt/${encoded}/hashBoxFileList/hashBoxList`;
 
     return res.json({
-      response_type: "in_channel",
+      response_type: "ephemeral",
       text: `📂 *${zoneRaw.replace('-', '층 ')}구역* 스캔함 연결`,
       attachments: [{
         color: "#36a64f",
