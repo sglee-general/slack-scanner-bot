@@ -1,18 +1,28 @@
-export default async function handler(req, res) {
-  try {
-    const userId = req.body.user_id;
-    const userName = req.body.user_name;
+import { google } from "googleapis";
 
-    // 🔥 테스트용 (처음엔 시트 없이)
-    return res.status(200).json({
-      response_type: "ephemeral",
-      text: `✅ 연결 성공 (${userName})`
-    });
+const auth = new google.auth.GoogleAuth({
+  credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS),
+  scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+});
 
-  } catch (err) {
-    return res.status(200).json({
-      response_type: "ephemeral",
-      text: "❌ 서버 오류"
-    });
+const sheets = google.sheets({ version: "v4", auth });
+
+async function getUser(userId) {
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: "1fAc-midGDQf2aPVavhUdGTBaN5GFvh5YZDiymV2fcVQ",
+    range: "Sheet1!A:D",
+  });
+
+  const rows = res.data.values;
+
+  for (let i = 1; i < rows.length; i++) {
+    if (rows[i][0] === userId) {
+      return {
+        name: rows[i][1],
+        boxId: rows[i][2],
+        zone: rows[i][3],
+      };
+    }
   }
+  return null;
 }
