@@ -10,24 +10,22 @@ const SCANNER_IPS = {
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
-  // --- 1. 슬랙 이벤트 처리 (홈 탭 열기 등) ---
+  // --- [수정된 부분] 1. 슬랙 서버 검증 (Challenge 대응) ---
+  // 이 부분은 req.body.event 바깥에 있어야 합니다!
+  if (req.body.type === 'url_verification') {
+    return res.status(200).json({ challenge: req.body.challenge });
+  }
+
+  // --- 2. 슬랙 이벤트 처리 (홈 탭 열기 등) ---
   if (req.body.event) {
     const event = req.body.event;
-
-    // 슬랙 서버 연결 확인용 (처음 한 번만 실행됨)
-    if (req.body.type === 'url_verification') {
-      return res.status(200).json({ challenge: req.body.challenge });
-    }
-
-    // 홈 탭이 열렸을 때 화면 그려주기
     if (event.type === 'app_home_opened') {
       await publishHomeView(event.user);
       return res.status(200).send("");
     }
-    return res.status(200).send("");
   }
 
-  // --- 2. 슬랙 명령어 처리 (/스캔) ---
+  // --- 3. 슬랙 명령어 처리 (/스캔) ---
   const { user_id, user_name, command } = req.body;
   
   if (command) {
@@ -76,7 +74,6 @@ export default async function handler(req, res) {
   }
 }
 
-// 홈 탭 화면 디자인 함수
 async function publishHomeView(userId) {
   const homeView = {
     type: "home",
@@ -84,13 +81,13 @@ async function publishHomeView(userId) {
       { type: "header", text: { type: "plain_text", text: "🚀 스캔 도우미 홈" } },
       { type: "section", text: { type: "mrkdwn", text: "안녕하세요! 비나우 스캔 도우미입니다.\n이제 홈 탭에서도 편리하게 스캔함을 이용하세요." } },
       { type: "divider" },
-      { type: "section", text: { type: "mrkdwn", text: "*명령어를 잊으셨나요?*\n채널 어디서든 `/스캔`을 입력하거나, 아래 가이드를 확인하세요." } },
+      { type: "section", text: { type: "mrkdwn", text: "*명령어를 잊으셨나요?*\n채널 어디서든 `/스캔`을 입력하거나, 아래 버튼을 클릭하세요." } },
       { 
         type: "actions", 
         elements: [{ 
           type: "button", 
           text: { type: "plain_text", text: "📂 내 스캔 폴더 연결하기" }, 
-          url: "slack://run-slash-command?command=%2F%EC%8A%A4%EC%BA%94", // 클릭 시 /스캔 자동 실행
+          url: "slack://run-slash-command?command=%2F%EC%8A%A4%EC%BA%94",
           style: "primary"
         }] 
       }
