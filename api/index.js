@@ -10,37 +10,40 @@ const SCANNER_IPS = {
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
-  if (req.body.type === 'url_verification') {
-    return res.status(200).json({ challenge: req.body.challenge });
+  // 슬랙 명령어(/스캔)는 body가 문자열로 올 수 있어 파싱이 필요할 수 있습니다.
+  const body = req.body;
+
+  // 1. 슬랙 서버 검증
+  if (body.type === 'url_verification') {
+    return res.status(200).json({ challenge: body.challenge });
   }
 
-  // 1. 홈 탭 열기 이벤트 처리 (여기서 링크를 미리 만듭니다)
-  if (req.body.event && req.body.event.type === 'app_home_opened') {
-    await publishHomeView(req.body.event.user);
+  // 2. 홈 탭 열기 이벤트 처리
+  if (body.event && body.event.type === 'app_home_opened') {
+    await publishHomeView(body.event.user);
     return res.status(200).send("");
   }
 
-  // 2. 명령어 처리 (/스캔)
-  if (req.body.command === '/스캔') {
-    const { user_id, user_name, response_url } = req.body;
-    const result = await getScanLink(user_id, user_name);
+  // 3. 슬래시 명령어 처리 (/스캔)
+  // 슬랙은 명령어 데이터를 'command'라는 필드로 보냅니다.
+  if (body.command === '/스캔') {
+    const userId = body.user_id;
+    const userName = body.user_name;
     
-    await fetch(response_url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        response_type: "ephemeral",
-        text: result.text,
-        attachments: result.attachments
-      })
+    const result = await getScanLink(userId, userName);
+    
+    // 명령어에 대한 응답은 res.json으로 직접 던지는게 가장 빠르고 정확합니다.
+    return res.status(200).json({
+      response_type: "ephemeral",
+      text: result.text,
+      attachments: result.attachments
     });
-    return res.status(200).send("");
   }
 
   return res.status(200).send("");
 }
 
-// [공통 로직] 구글 시트에서 정보를 가져와 링크 정보를 생성하는 함수
+// [로직 보존] 구글 시트 조회 및 링크 생성
 async function getScanLink(userId, userName) {
   try {
     const serviceAccountAuth = new JWT({
@@ -54,12 +57,13 @@ async function getScanLink(userId, userName) {
     const sheet = doc.sheetsByIndex[0];
     const rows = await sheet.getRows();
 
+    // ID 또는 이름으로 검색 (Slack ID 우선)
     const userRow = rows.find(row => 
       (row.get('Slack ID') && row.get('Slack ID').toString() === userId) || 
       (row.get('이름') && row.get('이름').toString() === userName)
     );
 
-    if (!userRow) return { text: `⚠️ 정보를 찾을 수 없습니다.`, url: null };
+    if (!userRow) return { text: `⚠️ ${userName || userId}님 정보를 찾을 수 없습니다.`, url: null };
 
     const boxId = String(userRow.get('박스번호')).padStart(3, '0');
     const zone = userRow.get('구역');
@@ -68,45 +72,42 @@ async function getScanLink(userId, userName) {
     const finalUrl = `http://${ip}/apps/box/index.html#opt/${encodeURIComponent(JSON.stringify(urlObj))}/hashBoxFileList/hashBoxList`;
 
     return {
-      text: `📂 *${zone.replace('-', '층 ')}구역* 스캔함 (${boxId}번)`,
+      text: `📂 *${zone.replace('-', '층 ')}구역* 스캔함 연결`,
       url: finalUrl,
       attachments: [{
         color: "#36a64f",
         blocks: [{
           type: "section",
-          text: { type: "mrkdwn", text: `안녕하세요 *${userName}*님! *${boxId}번* 박스로 연결됩니다.` },
+          text: { type: "mrkdwn", text: `안녕하세요 *${userName || userId}*님! *${boxId}번* 박스로 연결됩니다.` },
           accessory: { type: "button", text: { type: "plain_text", text: "목록 열기" }, url: finalUrl, style: "primary" }
         }]
       }]
     };
   } catch (error) {
-    return { text: "❌ 에러: " + error.message, url: null };
+    return { text: "❌ 시트 조회 오류: " + error.message, url: null };
   }
 }
 
-// 홈 탭 게시 함수 (사용자 정보를 조회해서 버튼에 URL을 직접 심음)
+// 홈 탭 게시
 async function publishHomeView(userId) {
-  // 사용자의 이름을 알기 위해 슬랙 API 호출 (선택 사항이나 정확도를 위해 권장)
-  // 여기서는 일단 시트 로직으로 바로 연결을 시도합니다.
   const result = await getScanLink(userId, "");
 
   const homeView = {
     type: "home",
     blocks: [
       { type: "header", text: { type: "plain_text", text: "🚀 스캔 도우미 홈" } },
-      { type: "section", text: { type: "mrkdwn", text: result.url ? `현재 연결된 스캔함: *${result.text}*` : "스캔 정보를 불러올 수 없습니다." } },
+      { type: "section", text: { type: "mrkdwn", text: result.url ? `현재 연결된 스캔함: *${result.text}*` : "⚠️ 정보를 불러오려면 `/스캔`을 한 번 실행하거나 관리자에게 문의하세요." } },
       { 
         type: "actions", 
         elements: [
           { 
             type: "button", 
             text: { type: "plain_text", text: "📂 내 스캔 폴더 바로 열기" }, 
-            url: result.url || "https://slack.com", // 링크가 없으면 기본값
+            url: result.url || "https://slack.com",
             style: "primary"
           }
         ] 
-      },
-      { type: "context", elements: [{ type: "mrkdwn", text: "💡 정보가 다르다면 구글 시트 등록 정보를 확인하세요." }] }
+      }
     ]
   };
 
