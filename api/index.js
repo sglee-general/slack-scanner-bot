@@ -1,5 +1,6 @@
-const { GoogleSpreadsheet } = require('google-spreadsheet');
-const { JWT } = require('google-auth-library');
+import querystring from 'querystring';
+import { GoogleSpreadsheet } from 'google-spreadsheet';
+import { JWT } from 'google-auth-library';
 
 const SCANNER_IPS = {
   "4-1": "192.168.0.231", "4-2": "192.168.0.251",
@@ -10,46 +11,53 @@ const SCANNER_IPS = {
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
-  // 슬랙 명령어(/스캔)는 body가 문자열로 올 수 있어 파싱이 필요할 수 있습니다.
-  const body = req.body;
+  // 🔥 핵심: Slack 요청 파싱 (JSON + form 둘 다 대응)
+  let body = req.body;
 
-  // 1. 슬랙 서버 검증
+  if (typeof body === 'string') {
+    body = querystring.parse(body);
+  }
+
+  if (!body.command && req.headers['content-type']?.includes('application/x-www-form-urlencoded')) {
+    body = querystring.parse(req.body);
+  }
+
+  // 🔹 1. URL 검증 (혹시 대비)
   if (body.type === 'url_verification') {
     return res.status(200).json({ challenge: body.challenge });
   }
 
-  // 2. 홈 탭 열기 이벤트 처리
+  // 🔹 2. 홈탭 이벤트
   if (body.event && body.event.type === 'app_home_opened') {
     await publishHomeView(body.event.user);
     return res.status(200).send("");
   }
 
-  // 3. 슬래시 명령어 처리 (/스캔)
-  // 슬랙은 명령어 데이터를 'command'라는 필드로 보냅니다.
+  // 🔹 3. 슬래시 명령어 (/스캔)
   if (body.command === '/스캔') {
     const userId = body.user_id;
     const userName = body.user_name;
-    
+
     const result = await getScanLink(userId, userName);
-    
-    // 명령어에 대한 응답은 res.json으로 직접 던지는게 가장 빠르고 정확합니다.
+
     return res.status(200).json({
       response_type: "ephemeral",
       text: result.text,
-      attachments: result.attachments
+      blocks: result.blocks
     });
   }
 
   return res.status(200).send("");
 }
 
-// [로직 보존] 구글 시트 조회 및 링크 생성
+
+// 🔥 시트 조회 + 링크 생성
 async function getScanLink(userId, userName) {
   try {
     const serviceAccountAuth = new JWT({
       email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
       key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+      scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
     });
 
     const doc = new GoogleSpreadsheet(process.env.GOOGLE_SHEET_ID, serviceAccountAuth);
@@ -57,56 +65,99 @@ async function getScanLink(userId, userName) {
     const sheet = doc.sheetsByIndex[0];
     const rows = await sheet.getRows();
 
-    // ID 또는 이름으로 검색 (Slack ID 우선)
-    const userRow = rows.find(row => 
-      (row.get('Slack ID') && row.get('Slack ID').toString() === userId) || 
-      (row.get('이름') && row.get('이름').toString() === userName)
+    const userRow = rows.find(row =>
+      (row.get('Slack ID') && row.get('Slack ID').toString() === userId)
     );
 
-    if (!userRow) return { text: `⚠️ ${userName || userId}님 정보를 찾을 수 없습니다.`, url: null };
+    if (!userRow) {
+      return {
+        text: `⚠️ ${userName}님 정보 없음`,
+        blocks: []
+      };
+    }
 
     const boxId = String(userRow.get('박스번호')).padStart(3, '0');
     const zone = userRow.get('구역');
     const ip = SCANNER_IPS[zone];
-    const urlObj = { "data": {"appId": "appId.std.box", "subId": "box"}, "boxNumStr": boxId };
+
+    if (!ip) {
+      return {
+        text: `⚠️ 구역 오류 (${zone})`,
+        blocks: []
+      };
+    }
+
+    const urlObj = {
+      data: { appId: "appId.std.box", subId: "box" },
+      boxNumStr: boxId
+    };
+
     const finalUrl = `http://${ip}/apps/box/index.html#opt/${encodeURIComponent(JSON.stringify(urlObj))}/hashBoxFileList/hashBoxList`;
 
     return {
-      text: `📂 *${zone.replace('-', '층 ')}구역* 스캔함 연결`,
-      url: finalUrl,
-      attachments: [{
-        color: "#36a64f",
-        blocks: [{
+      text: `📂 ${zone.replace('-', '층 ')}구역 스캔함`,
+      blocks: [
+        {
           type: "section",
-          text: { type: "mrkdwn", text: `안녕하세요 *${userName || userId}*님! *${boxId}번* 박스로 연결됩니다.` },
-          accessory: { type: "button", text: { type: "plain_text", text: "목록 열기" }, url: finalUrl, style: "primary" }
-        }]
-      }]
+          text: {
+            type: "mrkdwn",
+            text: `*${userName}님*\n${boxId}번 스캔 박스로 이동합니다.`
+          }
+        },
+        {
+          type: "actions",
+          elements: [
+            {
+              type: "button",
+              text: {
+                type: "plain_text",
+                text: "🚀 열기"
+              },
+              url: finalUrl,
+              style: "primary"
+            }
+          ]
+        }
+      ]
     };
+
   } catch (error) {
-    return { text: "❌ 시트 조회 오류: " + error.message, url: null };
+    return {
+      text: "❌ 시트 조회 오류",
+      blocks: []
+    };
   }
 }
 
-// 홈 탭 게시
+
+// 🔥 홈탭 구성
 async function publishHomeView(userId) {
   const result = await getScanLink(userId, "");
 
   const homeView = {
     type: "home",
     blocks: [
-      { type: "header", text: { type: "plain_text", text: "🚀 스캔 도우미 홈" } },
-      { type: "section", text: { type: "mrkdwn", text: result.url ? `현재 연결된 스캔함: *${result.text}*` : "⚠️ 정보를 불러오려면 `/스캔`을 한 번 실행하거나 관리자에게 문의하세요." } },
-      { 
-        type: "actions", 
+      {
+        type: "header",
+        text: { type: "plain_text", text: "🚀 스캔 도우미" }
+      },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: result.text
+        }
+      },
+      {
+        type: "actions",
         elements: [
-          { 
-            type: "button", 
-            text: { type: "plain_text", text: "📂 내 스캔 폴더 바로 열기" }, 
-            url: result.url || "https://slack.com",
+          {
+            type: "button",
+            text: { type: "plain_text", text: "📂 내 스캔 폴더 열기" },
+            url: result.blocks[1]?.elements[0]?.url || "https://slack.com",
             style: "primary"
           }
-        ] 
+        ]
       }
     ]
   };
