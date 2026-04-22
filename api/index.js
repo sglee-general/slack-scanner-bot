@@ -11,38 +11,41 @@ const SCANNER_IPS = {
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
-  // 1. 슬랙 서버 검증
+  // 1. 슬랙 서버 검증 (최초 1회 실행용)
   if (req.body.type === 'url_verification') {
     return res.status(200).json({ challenge: req.body.challenge });
   }
 
-  // 2. 홈 탭 버튼 클릭 처리 (Interactivity)
+  // 2. [Interactivity] 홈 탭 버튼 클릭 처리
   if (req.body.payload) {
     const payload = JSON.parse(req.body.payload);
-    res.status(200).send(""); // 3초 타임아웃 방지
+    
+    // 버튼 클릭 즉시 200 응답 (슬랙 타임아웃 방지)
+    res.status(200).send(""); 
 
     if (payload.actions && payload.actions[0].action_id === 'run_scan_action') {
-      // 버튼 클릭 시 시트 로직 실행
+      // 버튼 클릭 시 시트 로직 실행 (response_url을 통해 결과 전송)
       await processScanRequest(payload.user.id, payload.user.name, payload.response_url);
     }
     return;
   }
 
-  // 3. 홈 탭 열기 처리 (Events)
+  // 3. [Events] 홈 탭 열기 (화면 그리기)
   if (req.body.event && req.body.event.type === 'app_home_opened') {
     await publishHomeView(req.body.event.user);
     return res.status(200).send("");
   }
 
-  // 4. 슬래시 명령어 처리 (/스캔)
+  // 4. [Command] 슬래시 명령어 처리 (/스캔)
   if (req.body.command === '/스캔') {
     const { user_id, user_name, response_url } = req.body;
+    // 명령어 처리 시에도 시트 로직 실행
     await processScanRequest(user_id, user_name, response_url);
-    return res.status(200).send(""); // 명령어에 대한 기본 응답
+    return res.status(200).send(""); 
   }
 }
 
-// [핵심] 구글 시트를 조회하고 스캔 URL을 생성하여 답변하는 통합 함수
+// 구글 시트 연동 및 결과 전송 통합 함수
 async function processScanRequest(userId, userName, responseUrl) {
   try {
     const serviceAccountAuth = new JWT({
@@ -56,6 +59,7 @@ async function processScanRequest(userId, userName, responseUrl) {
     const sheet = doc.sheetsByIndex[0];
     const rows = await sheet.getRows();
 
+    // 슬랙 ID 또는 이름으로 행 찾기
     const userRow = rows.find(row => 
       (row.get('Slack ID') && row.get('Slack ID').toString() === userId) || 
       (row.get('이름') && row.get('이름').toString() === userName)
@@ -68,6 +72,9 @@ async function processScanRequest(userId, userName, responseUrl) {
     const boxId = String(userRow.get('박스번호')).padStart(3, '0');
     const zone = userRow.get('구역');
     const ip = SCANNER_IPS[zone];
+    
+    if (!ip) return await sendSlackMessage(responseUrl, `⚠️ ${zone} 구역의 IP 정보가 없습니다.`);
+
     const urlObj = { "data": {"appId": "appId.std.box", "subId": "box"}, "boxNumStr": boxId };
     const finalUrl = `http://${ip}/apps/box/index.html#opt/${encodeURIComponent(JSON.stringify(urlObj))}/hashBoxFileList/hashBoxList`;
 
@@ -81,17 +88,18 @@ async function processScanRequest(userId, userName, responseUrl) {
       }
     ]);
   } catch (error) {
+    console.error("처리 중 오류:", error);
     await sendSlackMessage(responseUrl, "❌ 서버 오류: " + error.message);
   }
 }
 
-// 결과 메시지를 슬랙으로 쏘는 함수
+// 슬랙 메시지 전송 유틸리티
 async function sendSlackMessage(url, text, attachments = []) {
   if (!url) return;
   await axios.post(url, { response_type: "ephemeral", text, attachments });
 }
 
-// 홈 탭을 그리는 함수
+// 홈 탭 그리기 유틸리티
 async function publishHomeView(userId) {
   const homeView = {
     type: "home",
@@ -105,7 +113,7 @@ async function publishHomeView(userId) {
         elements: [{ 
           type: "button", 
           text: { type: "plain_text", text: "📂 내 스캔 폴더 연결하기" }, 
-          action_id: "run_scan_action", // 이 ID가 서버에서 체크하는 ID입니다.
+          action_id: "run_scan_action", 
           style: "primary"
         }] 
       }
