@@ -11,7 +11,7 @@ const SCANNER_IPS = {
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
-  // 🔥 핵심: Slack 요청 파싱 (JSON + form 둘 다 대응)
+  // 🔥 Slack 요청 파싱 (JSON + form 둘 다 대응)
   let body = req.body;
 
   if (typeof body === 'string') {
@@ -22,18 +22,18 @@ export default async function handler(req, res) {
     body = querystring.parse(req.body);
   }
 
-  // 🔹 1. URL 검증 (혹시 대비)
+  // 🔹 URL 검증
   if (body.type === 'url_verification') {
     return res.status(200).json({ challenge: body.challenge });
   }
 
-  // 🔹 2. 홈탭 이벤트
+  // 🔹 홈탭 이벤트
   if (body.event && body.event.type === 'app_home_opened') {
     await publishHomeView(body.event.user);
     return res.status(200).send("");
   }
 
-  // 🔹 3. 슬래시 명령어 (/스캔)
+  // 🔹 슬래시 명령어 (/스캔)
   if (body.command === '/스캔') {
     const userId = body.user_id;
     const userName = body.user_name;
@@ -96,6 +96,9 @@ async function getScanLink(userId, userName) {
 
     return {
       text: `📂 ${zone.replace('-', '층 ')}구역 스캔함`,
+      url: finalUrl,
+      zone,
+      boxId,
       blocks: [
         {
           type: "section",
@@ -130,7 +133,7 @@ async function getScanLink(userId, userName) {
 }
 
 
-// 🔥 홈탭 구성
+// 🔥 홈탭 구성 (설명 강화 버전)
 async function publishHomeView(userId) {
   const result = await getScanLink(userId, "");
 
@@ -145,7 +148,32 @@ async function publishHomeView(userId) {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: result.text
+          text:
+`안녕하세요 👋  
+이 앱은 사내 복합기에서 스캔한 파일을 *내 개인 스캔 폴더로 바로 연결*해주는 도우미입니다.
+
+📌 *이용 방법*
+• 복합기에서 스캔 실행  
+• 아래 버튼 클릭  
+• 내 전용 스캔함으로 즉시 이동
+
+🏢 *지원 구역*
+4층 / 7층 / 14층 복합기 스캔함 자동 연결
+
+⚡ *Tip*
+슬랙에서 \`/스캔\` 명령어를 입력해도 동일하게 이용할 수 있습니다`
+        }
+      },
+      {
+        type: "divider"
+      },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: result.zone
+            ? `현재 연결된 스캔함: *${result.zone.replace('-', '층 ')} / ${result.boxId}번*`
+            : "⚠️ 사용자 정보를 불러올 수 없습니다"
         }
       },
       {
@@ -153,8 +181,8 @@ async function publishHomeView(userId) {
         elements: [
           {
             type: "button",
-            text: { type: "plain_text", text: "📂 내 스캔 폴더 열기" },
-            url: result.blocks[1]?.elements[0]?.url || "https://slack.com",
+            text: { type: "plain_text", text: "📂 내 스캔 폴더 바로 열기" },
+            url: result.url || "https://slack.com",
             style: "primary"
           }
         ]
