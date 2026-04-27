@@ -2,11 +2,11 @@ import querystring from 'querystring';
 import { GoogleSpreadsheet } from 'google-spreadsheet';
 import { JWT } from 'google-auth-library';
 
-// 🔹 [원본 복구] 기기 타입 설정
+// 🔹 [원본 복구] 기기 타입 설정 (7-1은 legacy로 유지하여 메인 접속 유도)
 const SCANNER_CONFIG = {
   "4-1": { ip: "192.168.0.231", type: "new" },
   "4-2": { ip: "192.168.0.251", type: "new" },
-  "7-1": { ip: "192.168.0.250", type: "legacy" }, // 👈 문제의 7층 1구역
+  "7-1": { ip: "192.168.0.250", type: "legacy" }, // 👈 7층 1구역 (C2265)
   "7-2": { ip: "192.168.0.230", type: "new" },
   "14-1": { ip: "192.168.0.252", type: "new" },
   "14-2": { ip: "192.168.0.253", type: "new" }
@@ -51,7 +51,7 @@ export default async function handler(req, res) {
   return res.status(200).send("");
 }
 
-// 🔥 [원본 복구 및 7-1 최적화] 시트 조회 + 링크 생성
+// 🔥 [원본 복구 및 안내 문구 수정] 시트 조회 + 링크 생성
 async function getScanLink(userId, userName) {
   try {
     const serviceAccountAuth = new JWT({
@@ -84,13 +84,12 @@ async function getScanLink(userId, userName) {
     let finalUrl = "";
     let btnText = "🚀 바로 열기";
 
-    // 🚀 [7-1 구역 전용 해결책] 직통 링크를 포기하고 '가장 편한 수동 연결' 제공
+    // 🚀 [7-1 구역] 보안상 메인 화면으로 연결하되, 문구 최적화
     if (config.type === "legacy") {
-      // 7층은 직통 주소를 넣으면 무조건 에러가 나므로 메인 주소로 보냅니다.
       finalUrl = `http://${config.ip}/scan.htm`;
-      btnText = "📂 스캔 목록 열기 (7층)";
+      btnText = "📂 스캔 목록 열기";
     } else {
-      // 다른 층은 기존 직통 방식 유지
+      // 다른 층 최신 기종용 직통 링크
       const urlObj = {
         data: { appId: "appId.std.box", subId: "box" },
         boxNumStr: boxId
@@ -122,12 +121,12 @@ async function getScanLink(userId, userName) {
             }
           ]
         },
-        // 7층 유저에게만 보여주는 추가 안내 (가독성 강화)
+        // 🔥 [팀장님 요청 문구 적용] 7-1 유저 전용 안내
         ...(config.type === "legacy" ? [{
           type: "context",
           elements: [{
             type: "mrkdwn",
-            text: `⚠️ 7층 복합기는 보안상 *2페이지*에서 *${boxId}번*을 직접 클릭해야 합니다.`
+            text: `7층 1구역 복합기는 메일함에서 직접 *${boxId}번*을 클릭하셔야 합니다.`
           }]
         }] : [])
       ]
