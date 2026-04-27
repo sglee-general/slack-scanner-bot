@@ -2,40 +2,45 @@ import querystring from 'querystring';
 import { GoogleSpreadsheet } from 'google-spreadsheet';
 import { JWT } from 'google-auth-library';
 
-// 🔹 [복구] 기존 IP 매핑 정보
-const SCANNER_IPS = {
-  "4-1": "192.168.0.231", "4-2": "192.168.0.251",
-  "7-1": "192.168.0.250", "7-2": "192.168.0.230",
-  "14-1": "192.168.0.252", "14-2": "192.168.0.253"
+// 🔥 기존 IP → 기기 타입 포함 구조로 변경
+const SCANNER_CONFIG = {
+  "4-1": { ip: "192.168.0.231", type: "new" },
+  "4-2": { ip: "192.168.0.251", type: "new" },
+  "7-1": { ip: "192.168.0.250", type: "legacy" }, // 👈 문제 기기
+  "7-2": { ip: "192.168.0.230", type: "new" },
+  "14-1": { ip: "192.168.0.252", type: "new" },
+  "14-2": { ip: "192.168.0.253", type: "new" }
 };
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
-  // [복구] Slack 요청 파싱 (JSON + form 대응)
   let body = req.body;
+
   if (typeof body === 'string') {
     body = querystring.parse(body);
   }
+
   if (!body.command && req.headers['content-type']?.includes('application/x-www-form-urlencoded')) {
     body = querystring.parse(req.body);
   }
 
-  // [복구] URL 검증 (Challenge)
+  // 🔹 URL 검증
   if (body.type === 'url_verification') {
     return res.status(200).json({ challenge: body.challenge });
   }
 
-  // [복구] 홈탭 이벤트 대응
+  // 🔹 홈탭 이벤트
   if (body.event && body.event.type === 'app_home_opened') {
     await publishHomeView(body.event.user);
     return res.status(200).send("");
   }
 
-  // [복구] 슬래시 명령어 (/스캔)
+  // 🔹 슬래시 명령어 (/스캔)
   if (body.command === '/스캔') {
     const userId = body.user_id;
     const userName = body.user_name;
+
     const result = await getScanLink(userId, userName);
 
     return res.status(200).json({
@@ -48,7 +53,8 @@ export default async function handler(req, res) {
   return res.status(200).send("");
 }
 
-// 🔥 시트 조회 + 링크 생성 (7-1 최적화 버전)
+
+// 🔥 시트 조회 + 링크 생성
 async function getScanLink(userId, userName) {
   try {
     const serviceAccountAuth = new JWT({
@@ -62,39 +68,41 @@ async function getScanLink(userId, userName) {
     const sheet = doc.sheetsByIndex[0];
     const rows = await sheet.getRows();
 
-    // [복구] Slack ID로 유저 찾기
     const userRow = rows.find(row =>
       (row.get('Slack ID') && row.get('Slack ID').toString() === userId)
     );
 
     if (!userRow) {
-      return { text: `⚠️ ${userName}님 정보 없음`, blocks: [] };
+      return {
+        text: `⚠️ ${userName}님 정보 없음`,
+        blocks: []
+      };
     }
 
     const boxId = String(userRow.get('박스번호')).padStart(3, '0');
     const zone = userRow.get('구역');
-    const ip = SCANNER_IPS[zone];
 
-    if (!ip) {
-      return { text: `⚠️ 구역 오류 (${zone})`, blocks: [] };
+    const config = SCANNER_CONFIG[zone];
+
+    if (!config) {
+      return {
+        text: `⚠️ 구역 오류 (${zone})`,
+        blocks: []
+      };
     }
 
-    // 🚀 [7-1 구역 전용 직통 로직]
     let finalUrl = "";
-    if (zone === "7-1") {
-      // C2265 모델은 복잡한 hashPath를 붙이면 세션 오류가 날 확률이 높습니다.
-      // 가장 단순화된 직통 구조로 생성합니다.
-      const urlObj7 = {
-        data: { appId: "appId.std.box", subId: "box", boxNumStr: boxId }
-      };
-      finalUrl = `http://${ip}/apps/box/index.html#opt/${encodeURIComponent(JSON.stringify(urlObj7))}`;
+
+    // 🔥 핵심 분기 로직
+    if (config.type === "legacy") {
+      finalUrl = `http://${config.ip}/scan.htm`;
     } else {
-      // [복구] 다른 층 기존 로직 유지
       const urlObj = {
         data: { appId: "appId.std.box", subId: "box" },
         boxNumStr: boxId
       };
-      finalUrl = `http://${ip}/apps/box/index.html#opt/${encodeURIComponent(JSON.stringify(urlObj))}/hashBoxFileList/hashBoxList`;
+
+      finalUrl = `http://${config.ip}/apps/box/index.html#opt/${encodeURIComponent(JSON.stringify(urlObj))}/hashBoxFileList/hashBoxList`;
     }
 
     return {
@@ -115,7 +123,12 @@ async function getScanLink(userId, userName) {
           elements: [
             {
               type: "button",
-              text: { type: "plain_text", text: "🚀 열기" },
+              text: {
+                type: "plain_text",
+                text: config.type === "legacy"
+                  ? "📂 스캔함 열기 (수동 선택)"
+                  : "🚀 바로 열기"
+              },
               url: finalUrl,
               style: "primary"
             }
@@ -125,11 +138,16 @@ async function getScanLink(userId, userName) {
     };
 
   } catch (error) {
-    return { text: "❌ 시트 조회 오류", blocks: [] };
+    console.error(error);
+    return {
+      text: "❌ 시트 조회 오류",
+      blocks: []
+    };
   }
 }
 
-// [복구] 홈탭 구성 (UI 유지)
+
+// 🔥 홈탭 구성
 async function publishHomeView(userId) {
   const result = await getScanLink(userId, "");
 
@@ -144,10 +162,25 @@ async function publishHomeView(userId) {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `안녕하세요 👋\n이 앱은 사내 복합기에서 스캔한 파일을 *내 개인 스캔 폴더로 바로 연결*해주는 도우미입니다.\n\n📌 *이용 방법*\n• 복합기에서 스캔 실행\n• 아래 버튼 클릭\n• 내 전용 스캔함으로 즉시 이동\n\n🏢 *지원 구역*\n4층 / 7층 / 14층 복합기 스캔함 자동 연결\n\n⚡ *Tip*\n슬랙에서 \`/스캔\` 명령어를 입력해도 동일하게 이용할 수 있습니다`
+          text:
+`안녕하세요 👋  
+이 앱은 사내 복합기에서 스캔한 파일을 *내 개인 스캔 폴더로 바로 연결*해주는 도우미입니다.
+
+📌 *이용 방법*
+• 복합기에서 스캔 실행  
+• 아래 버튼 클릭  
+• 내 전용 스캔함으로 즉시 이동
+
+🏢 *지원 구역*
+4층 / 7층 / 14층 복합기 스캔함 자동 연결
+
+⚡ *Tip*
+슬랙에서 \`/스캔\` 명령어를 입력해도 동일하게 이용할 수 있습니다`
         }
       },
-      { type: "divider" },
+      {
+        type: "divider"
+      },
       {
         type: "section",
         text: {
