@@ -2,11 +2,11 @@ import querystring from 'querystring';
 import { GoogleSpreadsheet } from 'google-spreadsheet';
 import { JWT } from 'google-auth-library';
 
-// 🔹 [복구 및 유지] GPT가 제안한 기기 타입 분기 구조
+// 🔥 기존 IP → 기기 타입(legacy/new) 포함 구조 유지
 const SCANNER_CONFIG = {
   "4-1": { ip: "192.168.0.231", type: "new" },
   "4-2": { ip: "192.168.0.251", type: "new" },
-  "7-1": { ip: "192.168.0.250", type: "legacy" }, // 👈 문제의 7층 기기
+  "7-1": { ip: "192.168.0.250", type: "legacy" }, // 👈 7층 1구역 (C2265 모델)
   "7-2": { ip: "192.168.0.230", type: "new" },
   "14-1": { ip: "192.168.0.252", type: "new" },
   "14-2": { ip: "192.168.0.253", type: "new" }
@@ -15,7 +15,7 @@ const SCANNER_CONFIG = {
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
-  // [복구] Slack 요청 파싱 (JSON + form 대응)
+  // 🔹 Slack 요청 파싱 (JSON + form 둘 다 대응)
   let body = req.body;
   if (typeof body === 'string') {
     body = querystring.parse(body);
@@ -24,21 +24,22 @@ export default async function handler(req, res) {
     body = querystring.parse(req.body);
   }
 
-  // 🔹 [복구] URL 검증
+  // 🔹 URL 검증 (Slack API 설정 시 활용)
   if (body.type === 'url_verification') {
     return res.status(200).json({ challenge: body.challenge });
   }
 
-  // 🔹 [복구] 홈탭 이벤트
+  // 🔹 홈탭 이벤트 (앱 클릭 시 가이드 화면)
   if (body.event && body.event.type === 'app_home_opened') {
     await publishHomeView(body.event.user);
     return res.status(200).send("");
   }
 
-  // 🔹 [복구] 슬래시 명령어 (/스캔)
+  // 🔹 슬래시 명령어 (/스캔)
   if (body.command === '/스캔') {
     const userId = body.user_id;
     const userName = body.user_name;
+
     const result = await getScanLink(userId, userName);
 
     return res.status(200).json({
@@ -51,8 +52,7 @@ export default async function handler(req, res) {
   return res.status(200).send("");
 }
 
-
-// 🔥 [핵심] 시트 조회 + 7층 직통 연결 로직 강화
+// 🔥 [핵심 수정] 시트 조회 + 7층 직통 연결 로직
 async function getScanLink(userId, userName) {
   try {
     const serviceAccountAuth = new JWT({
@@ -84,23 +84,21 @@ async function getScanLink(userId, userName) {
 
     let finalUrl = "";
 
-    // 🚀 [해결책] 7층 레거시 모델 전용 '강제 인코딩' 직통 링크
+    // 🚀 [해결책] 7층 1구역을 위한 진짜 'Direct' 주소 생성
     if (config.type === "legacy") {
-      // 7층 모델은 URL 중간에 따옴표(")가 있으면 죽습니다. JSON 전체를 아주 빡빡하게 인코딩해야 합니다.
-      const legacyObj = {
-        data: { appId: "appId.std.box", subId: "box", boxNumStr: boxId }
-      };
-      // JSON 데이터를 먼저 문자열로 만들고, 그걸 통째로 인코딩하여 따옴표를 %22로 바꿉니다.
-      const encodedData = encodeURIComponent(JSON.stringify(legacyObj));
-      finalUrl = `http://${config.ip}/apps/box/index.html#opt/${encodedData}`;
+      /**
+       * 7층(C2265)은 #opt/ 를 쓰면 100% 오류가 납니다.
+       * 대신 서버사이드에서 인식하는 ?boxNumStr= 방식을 사용합니다.
+       * 이 주소는 메인 화면을 거치지 않고 박스 내부로 기계를 강제 이동시킵니다.
+       */
+      finalUrl = `http://${config.ip}/apps/box/index.html?boxNumStr=${boxId}`;
     } else {
-      // 4층, 14층 최신 기종용 (표준 해시 방식 유지)
+      // 4층, 14층 등 최신 기종용 (표준 해시 링크 유지)
       const urlObj = {
         data: { appId: "appId.std.box", subId: "box" },
         boxNumStr: boxId
       };
-      const encodedData = encodeURIComponent(JSON.stringify(urlObj));
-      finalUrl = `http://${config.ip}/apps/box/index.html#opt/${encodedData}/hashBoxFileList/hashBoxList`;
+      finalUrl = `http://${config.ip}/apps/box/index.html#opt/${encodeURIComponent(JSON.stringify(urlObj))}/hashBoxFileList/hashBoxList`;
     }
 
     return {
@@ -121,17 +119,14 @@ async function getScanLink(userId, userName) {
           elements: [
             {
               type: "button",
-              text: {
-                type: "plain_text",
-                text: "🚀 스캔 폴더 바로 열기"
-              },
+              text: { type: "plain_text", text: "🚀 스캔 폴더 바로 열기" },
               url: finalUrl,
               style: "primary"
             },
-            // [보험용] 만약 직통 링크가 또 깨지면 GPT가 말한 메인화면이라도 갈 수 있게 추가
+            // GPT가 제안했던 '메인 화면'으로 가는 보험용 버튼 (오류 시 대비)
             ...(config.type === "legacy" ? [{
               type: "button",
-              text: { type: "plain_text", text: "🌐 연결 오류시(메인)" },
+              text: { type: "plain_text", text: "🌐 연결 오류 시(메인)" },
               url: `http://${config.ip}/scan.htm`
             }] : [])
           ]
@@ -140,12 +135,12 @@ async function getScanLink(userId, userName) {
     };
 
   } catch (error) {
+    console.error(error);
     return { text: "❌ 시트 조회 오류", blocks: [] };
   }
 }
 
-
-// 🔹 [복구] 홈탭 구성 (팀장님 원본 텍스트 100% 동일)
+// 🔥 홈탭 구성 (원본 가이드 텍스트 100% 복구)
 async function publishHomeView(userId) {
   const result = await getScanLink(userId, "");
 
@@ -176,9 +171,7 @@ async function publishHomeView(userId) {
 슬랙에서 \`/스캔\` 명령어를 입력해도 동일하게 이용할 수 있습니다`
         }
       },
-      {
-        type: "divider"
-      },
+      { type: "divider" },
       {
         type: "section",
         text: {
