@@ -126,7 +126,7 @@ async function getScanLink(userId, userName) {
           type: "context",
           elements: [{
             type: "mrkdwn",
-            text: `7층 1구역 복합기는 메일함에서 직접 *${boxId}번*을 클릭하셔야 합니다.`
+            text: `🚨7층 1구역 복합기 보안 이슈로 메일박스에서 직접 *${boxId}번*을 클릭하셔야 합니다.`
           }]
         }] : [])
       ]
