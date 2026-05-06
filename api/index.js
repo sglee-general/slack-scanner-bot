@@ -2,11 +2,11 @@ import querystring from 'querystring';
 import { GoogleSpreadsheet } from 'google-spreadsheet';
 import { JWT } from 'google-auth-library';
 
-// 🔹 [원본 복구] 기기 타입 설정 (7-1은 legacy로 유지하여 메인 접속 유도)
+// 🔹 [업데이트] 7-1 구역 타입을 'new'로 변경하여 직통 링크 활성화
 const SCANNER_CONFIG = {
   "4-1": { ip: "192.168.0.231", type: "new" },
   "4-2": { ip: "192.168.0.251", type: "new" },
-  "7-1": { ip: "192.168.0.250", type: "legacy" }, // 👈 7층 1구역 (C2265)
+  "7-1": { ip: "192.168.0.250", type: "new" }, // 👈 신규 모델 교체 반영
   "7-2": { ip: "192.168.0.230", type: "new" },
   "14-1": { ip: "192.168.0.252", type: "new" },
   "14-2": { ip: "192.168.0.253", type: "new" }
@@ -15,7 +15,7 @@ const SCANNER_CONFIG = {
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
-  // [원본 복구] Slack 요청 파싱
+  // 🔹 Slack 요청 파싱 (JSON + form 둘 다 대응)
   let body = req.body;
   if (typeof body === 'string') {
     body = querystring.parse(body);
@@ -24,21 +24,22 @@ export default async function handler(req, res) {
     body = querystring.parse(req.body);
   }
 
-  // 🔹 [원본 복구] URL 검증
+  // 🔹 URL 검증 (Slack API 설정 시 활용)
   if (body.type === 'url_verification') {
     return res.status(200).json({ challenge: body.challenge });
   }
 
-  // 🔹 [원본 복구] 홈탭 이벤트
+  // 🔹 홈탭 이벤트 (앱 클릭 시 가이드 화면)
   if (body.event && body.event.type === 'app_home_opened') {
     await publishHomeView(body.event.user);
     return res.status(200).send("");
   }
 
-  // 🔹 [원본 복구] 슬래시 명령어 (/스캔)
+  // 🔹 슬래시 명령어 (/스캔)
   if (body.command === '/스캔') {
     const userId = body.user_id;
     const userName = body.user_name;
+
     const result = await getScanLink(userId, userName);
 
     return res.status(200).json({
@@ -51,7 +52,7 @@ export default async function handler(req, res) {
   return res.status(200).send("");
 }
 
-// 🔥 [원본 복구 및 안내 문구 수정] 시트 조회 + 링크 생성
+// 🔥 시트 조회 + 링크 생성 로직
 async function getScanLink(userId, userName) {
   try {
     const serviceAccountAuth = new JWT({
@@ -70,7 +71,10 @@ async function getScanLink(userId, userName) {
     );
 
     if (!userRow) {
-      return { text: `⚠️ ${userName}님 정보 없음`, blocks: [] };
+      return {
+        text: `⚠️ ${userName}님 정보 없음`,
+        blocks: []
+      };
     }
 
     const boxId = String(userRow.get('박스번호')).padStart(3, '0');
@@ -78,23 +82,24 @@ async function getScanLink(userId, userName) {
     const config = SCANNER_CONFIG[zone];
 
     if (!config) {
-      return { text: `⚠️ 구역 오류 (${zone})`, blocks: [] };
+      return {
+        text: `⚠️ 구역 오류 (${zone})`,
+        blocks: []
+      };
     }
 
     let finalUrl = "";
-    let btnText = "🚀 바로 열기";
 
-    // 🚀 [7-1 구역] 보안상 메인 화면으로 연결하되, 문구 최적화
-    if (config.type === "legacy") {
-      finalUrl = `http://${config.ip}/scan.htm`;
-      btnText = "📂 스캔 목록 열기";
-    } else {
-      // 다른 층 최신 기종용 직통 링크
+    // 🚀 [통합 로직] 신규 모델은 모두 해시 기반 직통 링크를 사용합니다.
+    if (config.type === "new") {
       const urlObj = {
         data: { appId: "appId.std.box", subId: "box" },
         boxNumStr: boxId
       };
       finalUrl = `http://${config.ip}/apps/box/index.html#opt/${encodeURIComponent(JSON.stringify(urlObj))}/hashBoxFileList/hashBoxList`;
+    } else {
+      // 혹시라도 나중에 추가될 구형 기기를 위한 예외 처리 (현재는 모두 new)
+      finalUrl = `http://${config.ip}/scan.htm`;
     }
 
     return {
@@ -107,7 +112,7 @@ async function getScanLink(userId, userName) {
           type: "section",
           text: {
             type: "mrkdwn",
-            text: `*${userName}님 스캔함 정보*\n📍 구역: *${zone.replace('-', '층 ')}*\n🔑 박스 번호: *${boxId}번*`
+            text: `*${userName}님*\n${boxId}번 스캔 박스로 바로 이동합니다.`
           }
         },
         {
@@ -115,29 +120,28 @@ async function getScanLink(userId, userName) {
           elements: [
             {
               type: "button",
-              text: { type: "plain_text", text: btnText },
+              text: {
+                type: "plain_text",
+                text: "🚀 스캔함 바로 열기"
+              },
               url: finalUrl,
               style: "primary"
             }
           ]
-        },
-        // 🔥 [팀장님 요청 문구 적용] 7-1 유저 전용 안내
-        ...(config.type === "legacy" ? [{
-          type: "context",
-          elements: [{
-            type: "mrkdwn",
-            text: `🚨7층 1구역 복합기 보안 이슈로 메일박스에서 직접 *${boxId}번*을 클릭하셔야 합니다.`
-          }]
-        }] : [])
+        }
       ]
     };
 
   } catch (error) {
-    return { text: "❌ 시트 조회 오류", blocks: [] };
+    console.error(error);
+    return {
+      text: "❌ 시트 조회 오류",
+      blocks: []
+    };
   }
 }
 
-// 🔹 [원본 복구] 홈탭 구성
+// 🔥 홈탭 구성 (원본 가이드 텍스트 유지)
 async function publishHomeView(userId) {
   const result = await getScanLink(userId, "");
 
@@ -168,7 +172,9 @@ async function publishHomeView(userId) {
 슬랙에서 \`/스캔\` 명령어를 입력해도 동일하게 이용할 수 있습니다`
         }
       },
-      { type: "divider" },
+      {
+        type: "divider"
+      },
       {
         type: "section",
         text: {
