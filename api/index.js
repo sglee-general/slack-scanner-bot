@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { csv } from "d3-fetch";
 import { ComposableMap, Geographies, Geography, ZoomableGroup } from "react-simple-maps";
 
-const SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTv9Nf_RdMQwHDRRk1L1PrL6LsBV1hfhjUsZ9MhIV1LPWLOAmmb8BwI-eIavV01nrJORaE0U5Tv4g_b/pub?gid=916788690&single=true&output=csv";
+const SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTv9Nf_RdMQwHDRRk1L1PrL6LsBV1hfhjUsZ9MhIV1LPWLOAmmb8BwI-eIavV01nrJORaE0U5Tv4g_b/pub?output=csv";
 const geoUrl = "https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson";
 
 const colorMap = { GREEN: "#27ae60", BLUE: "#3498db", YELLOW: "#f1c40f", RED: "#e74c3c", GREY: "#dfe4ea" };
